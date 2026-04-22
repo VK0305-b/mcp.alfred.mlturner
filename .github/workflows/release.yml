@@ -5,13 +5,18 @@ on:
     branches:
       - master
 
+# One release-bump at a time on master
+concurrency:
+  group: release-bump-pr-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release:
     runs-on: ubuntu-latest
     environment: prod
     permissions:
       contents: write
-      pull-requests: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,19 +35,23 @@ jobs:
       - name: Install dependencies
         run: yarn install
 
-      # Bump version based on merged PR labels
+      # Do not create the version tag here; tag and GitHub release run after
+      # the version-bump PR is merged to master (see version_bump_merged_release.yml).
       - name: Bump version and create tag
         id: bumpr
         uses: haya14busa/action-bumpr@v1
         with:
           github_token: ${{ secrets.RELEASE_TOKEN }}
           default_bump_level: 'patch'
+          # Branch protection blocks direct push to master; the tag and release
+          # are created in the follow-up workflow after the version PR lands.
+          dry_run: 'true'
           tag_as_user: 'github-actions[bot]'
           tag_as_email: 'github-actions[bot]@users.noreply.github.com'
 
       # Update package.json files if version was bumped
       - name: Update package versions
-        if: ${{ !steps.bumpr.outputs.skip }}
+        if: steps.bumpr.outputs.skip != 'true'
         run: |
           NEW_VERSION="${{ steps.bumpr.outputs.next_version }}"
           NEW_VERSION_NO_V="${NEW_VERSION#v}"
@@ -62,48 +71,42 @@ jobs:
             fi
           done
 
-      # Commit the version updates
-      - name: Commit version updates
-        if: ${{ !steps.bumpr.outputs.skip }}
+      - name: Open version-bump pull request
+        if: steps.bumpr.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          BUMP_MSG: ${{ steps.bumpr.outputs.message }}
         run: |
+          set -euo pipefail
+          BUMP_VERSION="${{ steps.bumpr.outputs.next_version }}"
+          BRANCH="chore/bump-version-${BUMP_VERSION}"
+
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+
+          git checkout -b "$BRANCH"
           git add package.json packages/*/package.json
-          git commit -m "chore: bump version to ${{ steps.bumpr.outputs.next_version }} [skip ci]" || exit 0
-          git push
+          if git diff --cached --quiet; then
+            echo "No staged version changes; aborting."
+            exit 1
+          fi
+          git commit -m "chore: bump version to ${BUMP_VERSION}"
+          git push -u origin "$BRANCH"
 
-      # Build packages after version bump
-      - name: Build packages
-        if: ${{ !steps.bumpr.outputs.skip }}
-        run: yarn build
+          if [ "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number -q 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
+            echo "Open pull request for $BRANCH already exists."
+            exit 0
+          fi
 
-      # Create GitHub Release
-      - name: Create GitHub Release
-        if: ${{ !steps.bumpr.outputs.skip }}
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        with:
-          tag_name: ${{ steps.bumpr.outputs.next_version }}
-          release_name: Release ${{ steps.bumpr.outputs.next_version }}
-          body: |
-            ## Changes
+          {
+            echo "Automated version bump. **Merge this PR** after required checks (e.g. *Run Validations*) pass. The tag and GitHub release are created when this PR is merged."
+            echo
+            echo "$BUMP_MSG"
+          } > /tmp/pr_body.md
 
-            ${{ steps.bumpr.outputs.message }}
+          gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" \
+            --title "chore: bump version to ${BUMP_VERSION}" \
+            --body-file /tmp/pr_body.md
 
-            ## Packages Updated
-            - @mondaydotcomorg/agent-toolkit
-            - @mondaydotcomorg/monday-api-mcp
+          echo "Opened version bump pull request. Merge to create the tag, GitHub release, and trigger npm publish."
 
-            Auto-generated release from Release workflow.
-          draft: false
-          prerelease: false
-
-      # Output results
-      - name: Release Summary
-        if: ${{ !steps.bumpr.outputs.skip }}
-        run: |
-          echo "🚀 Release completed!"
-          echo "📋 Version: ${{ steps.bumpr.outputs.next_version }}"
-          echo "📦 Packages updated and published"
-          echo "🏷️ GitHub release created"
