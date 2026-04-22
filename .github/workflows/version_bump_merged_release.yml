@@ -1,1 +1,65 @@
+name: Tag and GitHub release (version bump PR)
 
+# After the version-bump PR (see release.yml) is merged to master, create the
+# version tag and GitHub release, and trigger npm publish on tag.
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - master
+
+concurrency:
+  group: post-merge-release-${{ github.event.pull_request.id }}
+  cancel-in-progress: false
+
+jobs:
+  create-tag-and-release:
+    if: |
+      github.event.pull_request.merged == true
+      && github.event.pull_request.base.ref == 'master'
+      && startsWith(github.event.pull_request.head.ref, 'chore/bump-version-')
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.18.1'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install Yarn
+        run: npm install -g yarn@1.22.21
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: Build packages
+        run: yarn build
+
+      - name: Get release tag from root package version
+        id: ver
+        run: |
+          V=$(node -p "require('./package.json').version")
+          case "$V" in
+            v*) T="$V" ;;
+            *) T="v$V" ;;
+          esac
+          echo "tag_name=$T" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag_name }}
+          name: Release ${{ steps.ver.outputs.tag_name }}
+          target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
