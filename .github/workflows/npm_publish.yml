@@ -12,8 +12,8 @@ on:
 
 jobs:
   publish-npm:
-    environment: prod
     runs-on: ubuntu-latest
+    # Add secret NPM_TOKEN under Settings > Secrets. publishing @mondaydotcomorg/* may require org access.
     steps:
       - uses: actions/checkout@v3
         with:
