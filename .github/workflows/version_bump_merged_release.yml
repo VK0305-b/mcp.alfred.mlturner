@@ -19,7 +19,7 @@ jobs:
       && github.event.pull_request.base.ref == 'master'
       && startsWith(github.event.pull_request.head.ref, 'chore/bump-version-')
     runs-on: ubuntu-latest
-    environment: prod
+    # Uses github.token; set secret RELEASE_TOKEN and use it here if your org requires a PAT.
     permissions:
       contents: write
     steps:
@@ -27,7 +27,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -62,4 +62,4 @@ jobs:
           target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
           generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
