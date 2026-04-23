@@ -72,7 +72,7 @@ jobs:
             fi
           done
 
-      - name: Open version-bump pull request
+      - name: Push version-bump branch and open pull request
         if: steps.bumpr.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -81,6 +81,8 @@ jobs:
           set -euo pipefail
           BUMP_VERSION="${{ steps.bumpr.outputs.next_version }}"
           BRANCH="chore/bump-version-${BUMP_VERSION}"
+          REPO_API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          HEAD_PARAM="${{ github.repository_owner }}:${BRANCH}"
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
@@ -92,21 +94,32 @@ jobs:
             exit 1
           fi
           git commit -m "chore: bump version to ${BUMP_VERSION}"
-          git push -u origin "$BRANCH"
+          git push -u origin "HEAD:refs/heads/${BRANCH}"
 
-          if [ "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number -q 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
-            echo "Open pull request for $BRANCH already exists."
+          # Open PRs without the gh CLI (not always on the runner; use REST API).
+          EXISTING=$(curl -sS -G -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-urlencode "head=${HEAD_PARAM}" --data-urlencode "state=open" \
+            "${REPO_API}/pulls" | jq 'length')
+          if [ "${EXISTING}" -gt 0 ]; then
+            echo "An open pull request for ${BRANCH} already exists. Nothing to do."
             exit 0
           fi
 
           {
             echo "Automated version bump. **Merge this PR** after required checks (e.g. *Run Validations*) pass. The tag and GitHub release are created when this PR is merged."
             echo
-            echo "$BUMP_MSG"
+            echo "${BUMP_MSG}"
           } > /tmp/pr_body.md
 
-          gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" \
-            --title "chore: bump version to ${BUMP_VERSION}" \
-            --body-file /tmp/pr_body.md
+          TITLE="chore: bump version to ${BUMP_VERSION}"
+          jq -n --arg head "$BRANCH" --arg base "master" --arg title "$TITLE" --rawfile body /tmp/pr_body.md \
+            '{head: $head, base: $base, title: $title, body: $body}' \
+            | curl -sS -f -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -d @- \
+              "${REPO_API}/pulls"
 
           echo "Opened version bump pull request. Merge to create the tag, GitHub release, and trigger npm publish."
