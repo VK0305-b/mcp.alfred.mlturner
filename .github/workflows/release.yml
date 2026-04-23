@@ -94,7 +94,10 @@ jobs:
             exit 1
           fi
           git commit -m "chore: bump version to ${BUMP_VERSION}"
-          git push -u origin "HEAD:refs/heads/${BRANCH}"
+          # If this branch was left on GitHub from a prior run, a plain push
+          # fails with "non-fast-forward". Only this robot uses this name, so
+          # overwrite: '+' allows replacing the remote branch with this new commit.
+          git push origin "+HEAD:refs/heads/${BRANCH}"
 
           # Open PRs without the gh CLI (not always on the runner; use REST API).
           EXISTING=$(curl -sS -G -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
