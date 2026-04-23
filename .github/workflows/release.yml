@@ -21,7 +21,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN }}
+          token: ${{ github.token }}
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -41,7 +42,7 @@ jobs:
         id: bumpr
         uses: haya14busa/action-bumpr@v1
         with:
-          github_token: ${{ secrets.RELEASE_TOKEN }}
+          github_token: ${{ github.token }}
           default_bump_level: 'patch'
           # Branch protection blocks direct push to master; the tag and release
           # are created in the follow-up workflow after the version PR lands.
@@ -85,7 +86,9 @@ jobs:
       - name: Open version-bump pull request
         if: steps.bumpr.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          USE_RELEASE_TOKEN: 'false'
           BUMP_MSG: ${{ steps.bumpr.outputs.message }}
         run: |
           set -euo pipefail
@@ -94,6 +97,15 @@ jobs:
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+          AUTH_TOKEN="${GH_TOKEN}"
+          if [ "${USE_RELEASE_TOKEN}" = "true" ] && [ -n "${RELEASE_TOKEN:-}" ]; then
+            AUTH_TOKEN="${RELEASE_TOKEN}"
+          fi
+          git remote set-url origin "https://x-access-token:${AUTH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          echo "Workflow SHA: ${GITHUB_SHA}"
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Auth token source: $([ "${USE_RELEASE_TOKEN}" = "true" ] && echo RELEASE_TOKEN || echo github.token)"
+          gh auth status || true
 
           git checkout -b "$BRANCH"
           git add package.json packages/*/package.json
